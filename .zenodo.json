@@ -1,0 +1,22 @@
+{
+  "title": "ONT Phage Assembly Pipeline (Nextflow DSL2)",
+  "description": "Nextflow DSL2 pipeline for de novo assembly (Porechop_ABI, Filtlong, Flye), polishing (Medaka), reorientation (Dnaapler) and characterisation (PhaBOX2, Pharokka) of bacteriophage genomes from Oxford Nanopore R10.4.1 reads.",
+  "upload_type": "software",
+  "license": "MIT",
+  "keywords": [
+    "bacteriophage",
+    "Oxford Nanopore",
+    "Nextflow",
+    "genome assembly",
+    "Klebsiella pneumoniae",
+    "phage annotation",
+    "Medaka",
+    "Pharokka"
+  ],
+  "creators": [
+    {
+      "name": "Algarni, Abdulmalek T.",
+      "affiliation": "King Abdulaziz City for Science and Technology (KACST)"
+    }
+  ]
+}

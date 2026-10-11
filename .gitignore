@@ -1,0 +1,19 @@
+# Data & results — never commit raw or sensitive data
+data/
+*.fastq
+*.fastq.gz
+*.fq.gz
+*.bam
+*.bai
+*.sam
+results/
+work/
+.nextflow*
+*.log
+# OS / editors
+.DS_Store
+.Rhistory
+.RData
+.Rproj.user/
+!test_data/
+!test_data/test_reads.fastq.gz
