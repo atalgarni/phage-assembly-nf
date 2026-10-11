@@ -34,6 +34,17 @@ def validate_params() {
     }
     if (!params.phabox2_db)  error "ERROR: --phabox2_db is required"
     if (!params.pharokka_db) error "ERROR: --pharokka_db is required"
+    // Fail fast (before hours of assembly) if a database directory is missing.
+    // Skipped for -stub runs, which use placeholder paths.
+    if (!workflow.stubRun) {
+        [phabox2_db: params.phabox2_db, pharokka_db: params.pharokka_db].each { name, path ->
+            def d = file(path)
+            if (!d.exists() || !d.isDirectory())
+                error "ERROR: --${name} directory not found: ${path}"
+            if (!d.list())
+                error "ERROR: --${name} directory is empty: ${path}"
+        }
+    }
 
     def valid_read_types = ['nano-raw', 'nano-hq', 'nano-corr',
                             'pacbio-raw', 'pacbio-corr', 'pacbio-hifi']
