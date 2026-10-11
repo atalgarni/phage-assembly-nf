@@ -50,7 +50,7 @@ process PORECHOP_ABI {
     // Stub for fast pipeline testing without running the real tool
     """
     echo "Stub: Porechop_ABI for ${sample_id}"
-    gzip -c /dev/null > ${sample_id}_trimmed.fastq.gz
+    printf "" | gzip > ${sample_id}_trimmed.fastq.gz
     echo "stub log" > ${sample_id}_porechop.log
     """
 }

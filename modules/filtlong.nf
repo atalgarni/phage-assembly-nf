@@ -56,7 +56,7 @@ process FILTLONG {
 
     stub:
     """
-    gzip -c /dev/null > ${sample_id}_filtered.fastq.gz
+    printf "" | gzip > ${sample_id}_filtered.fastq.gz
     echo "stub log"   > ${sample_id}_filtlong.log
     """
 }
