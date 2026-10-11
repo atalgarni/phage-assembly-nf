@@ -48,7 +48,6 @@ process PHAROKKA {
 
     # PYTHONWARNINGS=ignore prevents phanotate pkg_resources deprecation warning
     # from being written into GFF output and corrupting it.
-    # --mmseqs2_only skips PyHMMER which crashes due to API changes in newer pyhmmer.
     set +e
     PYTHONWARNINGS=ignore pharokka.py \\
         -i  ${polished} \\
@@ -58,7 +57,6 @@ process PHAROKKA {
         -g  phanotate \\
         -p  ${sample_id} \\
         -f  \\
-        --mmseqs2_only \\
         >> ${sample_id}_pharokka.log 2>&1
     EXIT_CODE=\$?
     set -e
