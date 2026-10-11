@@ -17,4 +17,4 @@ dependencies:
   - samtools=1.20
   - kaptive=3.1.0
   - mlst=2.33.1
-  # PhaBOX2 is best installed in its own environment: bioconda::phabox=2.1.13
+  # PhaBOX2 is best installed in its own environment: bioconda::phabox=2.1.13 with conda-forge::pandas=2.2 (PhaBOX 2.1.13 crashes with pandas 3)
