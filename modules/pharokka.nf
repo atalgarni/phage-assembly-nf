@@ -37,8 +37,15 @@ process PHAROKKA {
     def db      = params.pharokka_db ?: error("ERROR: --pharokka_db is required")
     def threads = task.cpus
     """
+    # Pharokka >= 1.10 uses subcommands ("pharokka run"); older releases use pharokka.py
+    if pharokka run -h > /dev/null 2>&1; then
+        PHAROKKA="pharokka run"
+    else
+        PHAROKKA="pharokka.py"
+    fi
+
     # Print version for diagnostics
-    pharokka.py -V >> ${sample_id}_pharokka.log 2>&1 || true
+    \$PHAROKKA -V >> ${sample_id}_pharokka.log 2>&1 || true
 
     echo "=== Pharokka annotation: ${sample_id} ===" | tee -a ${sample_id}_pharokka.log
     echo "  Input  : ${polished}"                    | tee -a ${sample_id}_pharokka.log
@@ -49,7 +56,7 @@ process PHAROKKA {
     # PYTHONWARNINGS=ignore prevents phanotate pkg_resources deprecation warning
     # from being written into GFF output and corrupting it.
     set +e
-    PYTHONWARNINGS=ignore pharokka.py \\
+    PYTHONWARNINGS=ignore \$PHAROKKA \\
         -i  ${polished} \\
         -o  pharokka_out \\
         -d  ${db} \\
