@@ -54,11 +54,12 @@ Raw ONT reads (.fastq.gz)
 - Conda/mamba (recommended), Docker (containers built via Seqera Wave), or all tools in `PATH`
 - Dnaapler can share the Pharokka environment
 - Databases (required): [PhaBOX2](https://github.com/KennthShang/PhaBOX) and [Pharokka](https://github.com/gbouras13/pharokka)
-  - The Pharokka database must match the Pharokka version; download it with the same Pharokka release the pipeline uses:
+  - The Pharokka database must match the Pharokka version the pipeline uses (1.10.1). A database from another release fails the version check (e.g. `PHROGs Database file VERSION_1_8_0 is missing`). Download it into a new, empty folder:
     ```bash
-    mamba create -n pharokka -c conda-forge -c bioconda pharokka=1.10.1 -y
-    conda run -n pharokka install_databases.py -o pharokka_db
+    mamba create -n pharokka110 -c conda-forge -c bioconda pharokka=1.10.1 -y
+    mamba run -n pharokka110 pharokka install -o pharokka_db_v110
     ```
+    Then pass it with `--pharokka_db pharokka_db_v110`. (`pharokka install` replaces the older `install_databases.py` from Pharokka 1.10 onwards.)
 
 ## Quick start
 
