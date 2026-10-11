@@ -46,7 +46,11 @@ Raw ONT reads (.fastq.gz)
 
 ## Requirements
 
-- Nextflow ≥ 24.04
+- Nextflow ≥ 24.04 with Java 17 or later. A dedicated environment avoids clashes with an older Java in the base environment:
+  ```bash
+  mamba create -n nextflow -c conda-forge -c bioconda nextflow=25.10.0 openjdk=17 -y
+  conda activate nextflow
+  ```
 - Conda/mamba (recommended), Docker (containers built via Seqera Wave), or all tools in `PATH`
 - Dnaapler can share the Pharokka environment
 - Databases (required): [PhaBOX2](https://github.com/KennthShang/PhaBOX) and [Pharokka](https://github.com/gbouras13/pharokka)
