@@ -98,6 +98,7 @@ bash run.sh
 | `--no_split` | `true` | Disable chimera splitting |
 | `--phabox2_skip_phamer` | `Y` | Skip PhaMer virus identification (isolates are known phages) |
 | `--threads` | `8` | CPUs per process |
+| `--max_cpus` / `--max_memory` / `--max_time` | `16` / `16.GB` / `48.h` | Upper limits for any single step; raise on larger machines |
 
 ### Host branch
 
