@@ -117,6 +117,7 @@ bash run.sh
 | `--pool_host` | `false` | Also assemble the pooled host reads of all samples (only when they share one host) |
 | `--host_genome_size` | `5.5m` | Expected host genome size |
 | `--host_min_reads` | `1000` | Skip host assembly for samples with fewer host reads |
+| `--host_min_depth` | `10` | Below this expected depth the host is still assembled, but flagged `LOW` in the summary (species ID possible, typing unreliable) |
 | `--kaptive_k_db` / `--kaptive_o_db` | `kpsc_k` / `kpsc_o` | Kaptive databases (`ab_k` / `ab_o` for *A. baumannii*) |
 | `--mlst_scheme` | `klebsiella` | MLST scheme; `null` for automatic detection |
 

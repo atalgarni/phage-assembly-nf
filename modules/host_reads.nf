@@ -18,7 +18,7 @@ process HOST_READS {
     tuple val(sample_id), path(reads), path(phage)
 
     output:
-    tuple val(sample_id), path("${sample_id}_host_reads.fastq.gz"), env(HOST_N), emit: host_reads
+    tuple val(sample_id), path("${sample_id}_host_reads.fastq.gz"), env(HOST_N), env(DEPTH), emit: host_reads
     path "${sample_id}_host_reads.stats.tsv",                                   emit: stats
 
     script:
@@ -52,6 +52,7 @@ process HOST_READS {
     """
     printf '@r1\\nACGT\\n+\\nIIII\\n' | gzip > ${sample_id}_host_reads.fastq.gz
     HOST_N=5000
+    DEPTH=9.1
     echo -e "sample\\thost_reads\\thost_bases\\texpected_depth\\n${sample_id}\\t5000\\t50000000\\t9.1" > ${sample_id}_host_reads.stats.tsv
     """
 }

@@ -51,6 +51,7 @@ process HOST_CONCORDANCE {
 
     input:
     path(rows)
+    path(depth_stats)
 
     output:
     path "host_typing_summary.tsv", emit: summary
@@ -58,13 +59,24 @@ process HOST_CONCORDANCE {
 
     script:
     """
-    echo -e "sample\\tcontigs\\ttotal_bp\\tn50\\tKL_locus\\tKL_confidence\\tKL_identity\\tOL_locus\\tOL_confidence\\tMLST_ST\\tMLST_alleles" \\
+    echo -e "sample\\tcontigs\\ttotal_bp\\tn50\\tKL_locus\\tKL_confidence\\tKL_identity\\tOL_locus\\tOL_confidence\\tMLST_ST\\tMLST_alleles\\texpected_depth\\tdepth_note" \\
         > host_typing_summary.tsv
-    cat ${rows} | sort >> host_typing_summary.tsv
+
+    # Expected host depth per sample (from HOST_READS); pooled = sum of samples
+    cat ${depth_stats} | awk -F'\\t' '\$1!="sample" {print \$1"\\t"\$4}' > depths.tsv
+
+    cat ${rows} | sort | awk -F'\\t' -v OFS='\\t' -v min=${params.host_min_depth} '
+        NR==FNR { d[\$1]=\$2; tot+=\$2; next }
+        {
+            dep = (\$1=="pooled") ? sprintf("%.1f", tot) : ((\$1 in d) ? d[\$1] : "-")
+            note = (dep == "-") ? "-" : ((dep+0 < min+0) ? "LOW: fragmented assembly; species ID only, K/O and MLST unreliable" : "OK")
+            print \$0, dep, note
+        }' depths.tsv - >> host_typing_summary.tsv
 
     # Group samples by capsule profile (KL + OL); STs listed per group.
     # Samples with an uncalled KL ("-") are reported as unresolved.
     awk -F'\\t' 'NR>1 && \$1!="pooled" {
+            if (\$13 ~ /^LOW/) low = (low == "" ? \$1 " (~" \$12 "x)" : low ", " \$1 " (~" \$12 "x)")
             if (\$5 == "-" || \$5 == "") { unres = (unres == "" ? \$1 : unres ", " \$1); next }
             key = "KL=" \$5 "  OL=" \$8
             if (!(key in g)) { order[++k] = key }
@@ -80,6 +92,7 @@ process HOST_CONCORDANCE {
                 print "  Samples: " g[order[i]]
             }
             if (unres != "") print "Unresolved (capsule locus not typed): " unres
+            if (low != "") print "Low host depth (< ${params.host_min_depth}x; typing unreliable): " low
             print ""
             if (k == 1 && n > 1)
                 print "All typed samples share one host profile -> consistent with a single propagation host.\\nPooling host reads (--pool_host) can improve host assembly completeness."

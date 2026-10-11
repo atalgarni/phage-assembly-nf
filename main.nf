@@ -128,12 +128,14 @@ workflow {
         HOST_READS(PORECHOP_ABI.out.trimmed_reads.join(DNAAPLER.out.reoriented, by: 0))
 
         ch_host = HOST_READS.out.host_reads
-            .filter { sample_id, reads, n ->
+            .filter { sample_id, reads, n, depth ->
                 def keep = (n as Integer) >= params.host_min_reads
                 if (!keep) log.warn "Host branch: ${sample_id} has only ${n} host reads (< ${params.host_min_reads}) — skipped"
+                else if ((depth as Double) < (params.host_min_depth as Double))
+                    log.warn "Host branch: ${sample_id} host depth ~${depth}x (< ${params.host_min_depth}x) — assembly will be fragmented; species ID possible, K/O and MLST typing unreliable"
                 keep
             }
-            .map { sample_id, reads, n -> tuple(sample_id, reads) }
+            .map { sample_id, reads, n, depth -> tuple(sample_id, reads) }
 
         if (params.pool_host) {
             HOST_POOL(HOST_READS.out.host_reads.map { it[1] }.collect())
@@ -152,7 +154,7 @@ workflow {
                 .join(KAPTIVE.out.results, by: 0)
                 .join(MLST.out.results,    by: 0)
         )
-        HOST_CONCORDANCE(HOST_SUMMARY_ROW.out.row.collect())
+        HOST_CONCORDANCE(HOST_SUMMARY_ROW.out.row.collect(), HOST_READS.out.stats.collect())
     }
 
     // ── Collect & report outputs ──────────────────────────────────────────────
