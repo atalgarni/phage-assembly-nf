@@ -4,180 +4,511 @@
 ![Nextflow](https://img.shields.io/badge/nextflow-%E2%89%A524.04-brightgreen)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
-A Nextflow DSL2 pipeline for de novo assembly, polishing, reorientation and annotation of bacteriophage genomes from Oxford Nanopore reads, tuned for single phage isolates (5–200 kb) sequenced at high coverage on R10.4.1 flow cells.
+A Nextflow DSL2 workflow for long-read-only reconstruction and characterisation of bacteriophage genomes from Oxford Nanopore Technologies (ONT) sequencing of phage lysates, with an optional branch that recovers and types the **propagation host** from the same run.
 
-**From one lysate run, two genomes.** Host DNA carried over in the phage lysate is usually discarded as contamination. With `--assemble_host`, reads that do not map to the phage are assembled into a host genome and typed (capsule K/O locus with Kaptive, MLST), and a concordance report shows which phages were propagated on the same host strain — without sequencing the host separately.
+For each isolate the workflow performs adapter removal, length-based read selection, de novo assembly, neural-network consensus polishing, reorientation to the large terminase subunit (*terL*), assembly statistics, taxonomic/lifestyle/host prediction and functional annotation. Reads that do not map to the final phage genome — residual host DNA that survives DNase treatment of the lysate — can optionally be assembled into a draft host genome and typed by capsule (K) and O-antigen (O) locus and multilocus sequence type (MLST). A cross-sample concordance report identifies isolates propagated on the same host strain.
+
+---
+
+## Contents
+
+1. [Workflow overview](#1-workflow-overview)
+2. [Methods](#2-methods)
+3. [Host branch](#3-host-branch)
+4. [Installation](#4-installation)
+5. [Input](#5-input)
+6. [Usage](#6-usage)
+7. [Parameters](#7-parameters)
+8. [Output](#8-output)
+9. [Interpreting the results](#9-interpreting-the-results)
+10. [Validation](#10-validation)
+11. [Computational requirements](#11-computational-requirements)
+12. [Troubleshooting](#12-troubleshooting)
+13. [Software versions](#13-software-versions)
+14. [Citation](#14-citation)
+
+---
+
+## 1. Workflow overview
 
 ```
-Raw ONT reads (.fastq.gz)
-        │
-        ▼
- PORECHOP_ABI    ab initio adapter discovery & trimming (--no_split by default)
-        ▼
- FILTLONG        length filter (≥1 kb) + optional longest-first subsampling
-        ▼
- FLYE            de novo assembly (no --meta; circularity reported)
-        ▼
- MEDAKA          consensus polishing (R10.4.1 model)
-        ▼
- DNAAPLER        reorient genome to start at terL
-        │
-        ├──► ASSEMBLY_STATS   contigs, length, N50/N90, GC%
-        ├──► PHABOX2          taxonomy, lifestyle, host prediction
-        ├──► PHAROKKA         functional annotation, GenBank/GFF
-        │
-        └──► (--assemble_host)
-             HOST_READS       trimmed reads not mapping to the phage (minimap2 + samtools)
-             HOST_FLYE        host assembly (e.g. 5.5 Mb)  → HOST_MEDAKA polishing
-             KAPTIVE + MLST   capsule K/O locus and sequence type
-             HOST_CONCORDANCE which samples share a host profile
-             (--pool_host)    extra assembly from pooled host reads of all samples
+                         ONT reads, one FASTQ per isolate
+                                       │
+                       ┌───────────────▼───────────────┐
+                       │ PORECHOP_ABI   adapter removal │
+                       └───────────────┬───────────────┘
+                                       │ trimmed reads ─────────────────────┐
+                       ┌───────────────▼───────────────┐                    │
+                       │ FILTLONG  length filter /      │                    │
+                       │           depth subsampling    │                    │
+                       └───────────────┬───────────────┘                    │
+                                       │ filtered reads ──────┐              │
+                       ┌───────────────▼───────────────┐      │              │
+                       │ FLYE   de novo assembly        │      │              │
+                       └───────────────┬───────────────┘      │              │
+                       ┌───────────────▼───────────────┐      │              │
+                       │ MEDAKA consensus polishing     │◄─────┘              │
+                       └───────────────┬───────────────┘                    │
+                       ┌───────────────▼───────────────┐                    │
+                       │ DNAAPLER reorient to terL      │                    │
+                       └───────────────┬───────────────┘                    │
+                                       │ final phage genome                  │
+          ┌────────────────────────────┼────────────────────────┐           │
+          ▼                            ▼                        ▼           ▼
+   ASSEMBLY_STATS               PHABOX2                     PHAROKKA     HOST_READS (--assemble_host)
+   length, N50/N90, GC     taxonomy (PhaGCN)            CDS calling      minimap2 map-ont → unmapped reads
+                           lifestyle (PhaTYP)           PHROG/VFDB/CARD          │
+                           host (CHERRY)                tRNA/CRISPR/tmRNA  HOST_FLYE → HOST_MEDAKA
+                                                        INPHARED Mash            │
+                                                                          KAPTIVE (K/O)  +  MLST
+                                                                                 │
+                                                                    HOST_SUMMARY + HOST_CONCORDANCE
 ```
 
-## Design choices for phage data
+Samples are processed independently and in parallel; each FASTQ file is one sample.
 
-| Choice | Default | Why |
+---
+
+## 2. Methods
+
+### 2.1 Adapter removal — Porechop_ABI 0.5.0
+
+```
+porechop_abi -abi -i <reads> -o <sample>_trimmed.fastq.gz --format fastq.gz \
+             --no_split --min_split_read_size 1000 -t <cpus>
+```
+
+* `-abi` infers adapter sequences *ab initio* from the reads rather than relying only on Porechop's built-in adapter set, which is useful for newer ligation and rapid kits.
+* `--no_split` (default) disables splitting of reads at internal adapters. Phage genomes are small and sequenced at very high depth, so long reads spanning most of the genome are the most informative for assembly; splitting would fragment legitimate long reads in exchange for removing a small number of chimeras. Set `--no_split false` to restore chimera splitting.
+
+### 2.2 Read selection — Filtlong 0.3.1
+
+```
+filtlong --min_length 1000 [--target_bases N] <trimmed reads>
+```
+
+* Reads shorter than `--min_length` (default 1 kb) are discarded. This matches Flye's minimum overlap floor; shorter reads cannot contribute to the overlap graph.
+* `--target_bases` (optional) retains the highest-scoring reads (Filtlong ranks by length and mean quality) up to the requested number of bases. Phage lysates frequently yield 1,000–10,000× coverage; downsampling to ~100× (e.g. `--target_bases 11000000` for a ~110 kb genome) reduces run time and avoids coverage-driven graph artefacts.
+* Read counts before and after filtering are written to `02_filtlong/<sample>_filtlong.log`.
+
+### 2.3 De novo assembly — Flye 2.9.6
+
+```
+flye --nano-raw <filtered reads> --genome-size <size> --iterations 1 \
+     --out-dir flye_out --threads <cpus>
+```
+
+* Run in single-genome mode (no `--meta`): an isolate lysate contains one phage genome, and metagenomic mode would relax the uniform-coverage assumption that helps resolve a single high-depth genome.
+* `--genome-size` should be set to the expected phage genome size. Flye uses it to estimate coverage and choose the initial disjointig parameters; its automatic estimate is less reliable at the extreme depths typical of phage runs.
+* `--read_type` sets the Flye input mode. The default is `nano-raw`; `nano-hq` is recommended by the Flye authors for R10.4.1 data basecalled in HAC/SUP mode (Q20+).
+* Flye is retried up to twice with increasing memory (8 GB × attempt).
+
+### 2.4 Consensus polishing — Medaka 2.1.1
+
+```
+medaka_consensus -i <filtered reads> -d <flye assembly> -m r1041_e82_400bps_hac_v4.3.0 \
+                 -o medaka_out -t <cpus>
+```
+
+* Filtered reads are realigned to the Flye draft and a recurrent neural network computes a consensus, correcting the systematic indel errors of nanopore reads (predominantly in homopolymers).
+* **The model must match the flow cell, kit and basecaller model used to generate the reads.** The default corresponds to Dorado `dna_r10.4.1_e8.2_400bps_hac@v4.3.0`. List available models with `medaka tools list_models`.
+
+### 2.5 Reorientation — Dnaapler 1.4.0
+
+```
+dnaapler phage -i <polished assembly> -o dnaapler_out -p <sample> -t <cpus>
+```
+
+* Rotates the assembly so that it begins at the start codon of the large terminase subunit (*terL*), identified by MMseqs2 search against a *terL* database, and places that gene on the forward strand.
+* This gives every isolate the same coordinate origin, which is required for meaningful gene-order (synteny) comparison, pangenome analysis and consistent locus numbering in annotations.
+* If Dnaapler fails or finds no *terL* hit, the polished assembly is passed on unchanged and a warning is written to the log; the pipeline does not stop.
+
+### 2.6 Assembly statistics — built-in
+
+Number of contigs, total length, largest contig, N50, N90 and GC content are computed with POSIX `awk` (no external dependency, identical output on Linux and macOS). Per-sample tables are concatenated into `summary/assembly_summary.tsv`.
+
+### 2.7 Taxonomy, lifestyle and host prediction — PhaBOX2 2.1.13
+
+```
+phabox2 --task end_to_end --contigs <genome> --dbdir <db> --len 1000 --skip Y
+```
+
+| Module | Prediction | Basis |
 |---|---|---|
-| `--no_split` | on | Chimera splitting on a small genome risks fragmenting legitimate long reads |
-| `--meta` | off | A phage isolate is a single genome, not a community |
-| `--genome_size` | *set it* | Flye's auto-estimate is less reliable at the extreme depths typical of phage runs |
-| `--target_bases` | off | Subsample very deep or host-contaminated samples (e.g. `11000000` ≈ 100× of a 110 kb phage) |
-| Dnaapler | on | Consistent start coordinate (terL) across isolates for comparison and annotation |
+| PhaGCN | Taxonomic lineage to genus (and nearest species) | Graph convolutional network over protein-sharing networks with ICTV reference genomes |
+| PhaTYP | Lifestyle (virulent / temperate) | Transformer model on protein-cluster "sentences" |
+| CHERRY | Host genus | Link prediction on a phage–host knowledge graph, with alignment-based (CRISPR, AAI) evidence where available |
 
-## Requirements
+`--skip Y` bypasses PhaMer (virus identification), because input contigs are assembled from isolate lysates and are already known to be phage. pandas is pinned to 2.2 in the PhaBOX2 environment: PhaBOX2 2.1.13 raises a `TypeError` in PhaGCN under pandas 3.
 
-- Nextflow ≥ 24.04 with Java 17 or later. A dedicated environment avoids clashes with an older Java in the base environment:
-  ```bash
-  mamba create -n nextflow -c conda-forge -c bioconda nextflow=25.10.0 openjdk=17 -y
-  conda activate nextflow
-  ```
-- Conda/mamba (recommended), Docker (containers built via Seqera Wave), or all tools in `PATH`
-- Dnaapler can share the Pharokka environment
-- Databases (required): [PhaBOX2](https://github.com/KennthShang/PhaBOX) and [Pharokka](https://github.com/gbouras13/pharokka)
-  - The Pharokka database must match the Pharokka version the pipeline uses (1.10.1). A database from another release fails the version check (e.g. `PHROGs Database file VERSION_1_8_0 is missing`). Download it into a new, empty folder:
-    ```bash
-    mamba create -n pharokka110 -c conda-forge -c bioconda pharokka=1.10.1 -y
-    mamba run -n pharokka110 pharokka install -o pharokka_db_v110
-    ```
-    Then pass it with `--pharokka_db pharokka_db_v110`. (`pharokka install` replaces the older `install_databases.py` from Pharokka 1.10 onwards.)
+### 2.8 Functional annotation — Pharokka 1.10.1
 
-## Quick start
+```
+pharokka run -i <genome> -o pharokka_out -d <db> -g phanotate -p <sample> -t <cpus> -f
+```
+
+* **Gene calling:** PHANOTATE, which models phage gene density and permits overlapping genes, and generally calls more short ORFs than Prodigal on phage genomes.
+* **Functional assignment:** MMseqs2 profile search and PyHMMER HMM search against PHROGs (functional categories: head and packaging, tail, lysis, DNA/RNA metabolism, integration/excision, transcription regulation, moron/auxiliary metabolic genes, connector, other, unknown).
+* **Additional databases:** VFDB (virulence factors) and CARD (antimicrobial resistance genes) — relevant to therapeutic phage safety assessment.
+* **Non-coding features:** tRNAscan-SE 2 (tRNA), Aragorn (tmRNA), MinCED (CRISPR arrays).
+* **Closest known phage:** Mash search against INPHARED (all complete phage genomes in GenBank).
+* The wrapper detects the CLI generation: `pharokka run` (≥ 1.10) or `pharokka.py` (older).
+
+---
+
+## 3. Host branch
+
+Enabled with `--assemble_host`. Designed for lysates in which host DNA was not completely removed.
+
+### 3.1 Host read extraction
+
+```
+minimap2 -ax map-ont <final phage genome> <Porechop-trimmed reads> \
+  | samtools view -f 4 -b | samtools fastq | gzip > <sample>_host_reads.fastq.gz
+```
+
+* Reads are taken **after Porechop_ABI and before Filtlong**, so short host fragments that Filtlong would discard are retained.
+* `-f 4` keeps reads that do not align to the phage. These are predominantly host chromosomal and plasmid DNA; contaminants and unassembled phage reads, if present, are also included.
+* Expected host depth is computed as `host bases ÷ --host_genome_size` and written to `<sample>_host_reads.stats.tsv`.
+
+### 3.2 Depth criteria
+
+| Condition | Behaviour |
+|---|---|
+| host reads < `--host_min_reads` (1,000) | Host assembly skipped, warning logged |
+| expected depth < `--host_min_depth` (10×) | Host **is** assembled, warning logged, sample flagged `LOW` in the summary |
+| expected depth ≥ `--host_min_depth` | Assembled and flagged `OK` |
+
+Low-depth samples are not skipped because a fragmented host assembly still supports species-level identification (e.g. by BLAST of the largest contigs), whereas K/O-locus and MLST calls become unreliable when the relevant loci are incompletely assembled.
+
+### 3.3 Assembly, polishing and typing
+
+* **Flye** in single-genome mode with `--genome-size <host_genome_size>` (default 5.5 Mb, *K. pneumoniae*), then **Medaka** with the same model as the phage. If Medaka fails, the Flye draft is used.
+* **Kaptive 3.1.0** identifies the capsule polysaccharide (K) and lipopolysaccharide O-antigen (O) biosynthesis loci and reports the best-matching locus, match confidence (e.g. *Typeable*) and identity. Default databases are `kpsc_k` / `kpsc_o` (*Klebsiella pneumoniae* species complex); use `ab_k` / `ab_o` for *Acinetobacter baumannii*.
+* **mlst 2.33.1** (PubMLST schemes) assigns the sequence type; default scheme `klebsiella`, or automatic scheme detection with `--mlst_scheme false`.
+* Failure of any host step affects only that sample and never stops the phage workflow.
+
+### 3.4 Concordance report
+
+`HOST_CONCORDANCE` groups samples by capsule profile (KL + OL locus) and lists the STs observed in each group:
+
+* **One profile across samples** → consistent with a single propagation host; `--pool_host` can then improve completeness.
+* **Several profiles** → samples were propagated on different hosts; host reads should not be pooled across profiles.
+* Samples without a K-locus call are reported as *unresolved*, and low-depth samples are listed separately. An uncalled value (`-`) usually reflects low depth and is not evidence of a different host.
+
+### 3.5 Pooled host assembly
+
+With `--pool_host`, host reads from **all** samples are concatenated and assembled as an additional sample named `pooled`, increasing depth when the isolates share a host. Use only after the per-sample concordance report supports a common host.
+
+---
+
+## 4. Installation
+
+### 4.1 Nextflow
+
+Nextflow ≥ 24.04 and Java 17–26 are required. A dedicated environment avoids conflicts with an older Java in the base conda environment:
 
 ```bash
-# Check the pipeline logic without running any tool
-nextflow run main.nf -profile test -stub
+mamba create -n nextflow -c conda-forge -c bioconda nextflow=25.10.0 openjdk=17 -y
+conda activate nextflow
+nextflow -version
+```
 
-# Full run, conda environments built automatically from bioconda
+### 4.2 Pipeline
+
+```bash
+git clone https://github.com/atalgarni/phage-assembly-nf.git
+cd phage-assembly-nf
+nextflow run main.nf -profile test -stub --assemble_host   # logic check, no tools executed
+```
+
+### 4.3 Software
+
+| Profile | How tools are provided | Status |
+|---|---|---|
+| `conda` | Nextflow builds one environment per process from the pinned bioconda versions (section 13). Requires `mamba`. | Tested (macOS Intel) |
+| `docker` | Containers built on the fly from the same conda specifications via Seqera Wave (internet access required) | Not yet tested |
+| `standard` | All tools must already be in `PATH` | — |
+
+Existing environments can be used instead of building new ones by passing full environment paths (`--flye_conda /path/to/envs/flye`, etc.); `run.sh` does this automatically from environment names.
+
+### 4.4 Databases
+
+**PhaBOX2** — download the database matching PhaBOX2 2.1.x from the [PhaBOX repository](https://github.com/KennthShang/PhaBOX) and pass its directory with `--phabox2_db`.
+
+**Pharokka** — the database must match the Pharokka release used by the pipeline (1.10.1). A database from another release fails Pharokka's version check (e.g. `PHROGs Database file VERSION_1_8_0 is missing`). Install into a new, empty folder:
+
+```bash
+mamba create -n pharokka110 -c conda-forge -c bioconda pharokka=1.10.1 -y
+mamba run -n pharokka110 pharokka install -o pharokka_db_v110
+```
+
+Both database directories are checked for existence and content at launch, before any assembly is run.
+
+**Kaptive and mlst** databases are bundled with their conda packages.
+
+---
+
+## 5. Input
+
+* One FASTQ (`.fastq`, `.fq`, optionally gzipped) per isolate, passed as a path or a quoted glob: `--input "reads/*.fastq.gz"`.
+* The sample ID is the file name without the FASTQ extension (`T_7.1_A.fastq.gz` → `T_7.1_A`).
+* Reads should be basecalled and demultiplexed. Concatenate multiple FASTQ chunks of one barcode beforehand (`cat barcode01/*.fastq.gz > sample.fastq.gz`).
+* Note the basecalling model: it determines `--medaka_model` and the appropriate `--read_type`.
+
+---
+
+## 6. Usage
+
+**Single isolate, phage only**
+
+```bash
 nextflow run main.nf \
-    --input "data/*.fastq.gz" \
-    --genome_size 50k \
-    --phabox2_db /path/to/phabox_db \
-    --pharokka_db /path/to/pharokka_db \
-    --threads 16 \
+    --input reads/T_7.1_A.fastq.gz \
+    --genome_size 111k \
+    --phabox2_db /db/phabox_db_v2 \
+    --pharokka_db /db/pharokka_db_v110 \
+    --outdir results \
     -profile conda
 ```
 
-Each FASTQ file is treated as one sample; samples run in parallel.
-
-### Using existing conda environments (`run.sh`)
-
-If the tools are already installed in named conda environments, edit the CONFIG section at the top of `run.sh` (input, genome size, environment names, database paths) and run:
+**Several isolates with host recovery and typing**
 
 ```bash
-bash run.sh
+nextflow run main.nf \
+    --input "reads/*.fastq.gz" \
+    --genome_size 111k \
+    --target_bases 11000000 \
+    --phabox2_db /db/phabox_db_v2 \
+    --pharokka_db /db/pharokka_db_v110 \
+    --assemble_host \
+    --outdir results \
+    -profile conda
 ```
 
-`run.sh` checks every tool and input before launching, then reports the circularity of each assembly.
+**Pooled host assembly** (after the concordance report shows a single host profile): add `--pool_host`.
 
-## Parameters
+**Non-*Klebsiella* host** (e.g. *A. baumannii*, ~4 Mb):
+
+```bash
+    --assemble_host --host_genome_size 4m --kaptive_k_db ab_k --kaptive_o_db ab_o --mlst_scheme abaumannii_2
+```
+
+**Resume** an interrupted or modified run (completed steps are reused from `work/`):
+
+```bash
+nextflow run main.nf <same arguments> -resume
+```
+
+**Wrapper script:** edit the CONFIG block at the top of `run.sh` (input, genome size, environment names, database paths) and run `bash run.sh`. It checks every tool and input before launching and prints assembly topology at the end.
+
+---
+
+## 7. Parameters
+
+### Input / output
 
 | Parameter | Default | Description |
 |---|---|---|
-| `--input` | *(required)* | Reads file or glob, e.g. `"data/*.fastq.gz"` |
+| `--input` | *(required)* | FASTQ file or quoted glob |
 | `--outdir` | `results` | Output directory |
-| `--genome_size` | `null` | Expected phage genome size, e.g. `50k`, `150k` |
-| `--read_type` | `nano-raw` | Flye read type without leading dashes: `nano-raw`, `nano-hq` (R10.4.1 HAC/SUP, Q20+), `nano-corr` |
+
+### Read processing
+
+| Parameter | Default | Description |
+|---|---|---|
+| `--abi` | `true` | Porechop_ABI *ab initio* adapter inference |
+| `--no_split` | `true` | Disable splitting of reads at internal adapters |
+| `--discard_middle` | `false` | Discard reads with internal adapters (when splitting is enabled) |
+| `--min_split_read_size` | `1000` | Minimum length of split read fragments |
 | `--min_length` | `1000` | Filtlong minimum read length (bp) |
-| `--target_bases` | `null` | Filtlong subsampling target (bases) |
+| `--target_bases` | `null` | Filtlong target bases (off by default) |
+
+### Assembly and polishing
+
+| Parameter | Default | Description |
+|---|---|---|
+| `--genome_size` | `null` | Expected phage genome size, e.g. `50k`, `111k` (strongly recommended) |
+| `--read_type` | `nano-raw` | Flye input mode without leading dashes: `nano-raw`, `nano-hq`, `nano-corr` |
 | `--iterations` | `1` | Flye polishing iterations |
-| `--min_overlap` | `null` | Flye minimum overlap (auto if unset) |
-| `--medaka_model` | `r1041_e82_400bps_hac_v4.3.0` | Must match the basecalling model |
+| `--min_overlap` | `null` | Flye minimum overlap (automatic if unset) |
+| `--meta` | `false` | Flye metagenome mode (not recommended for isolates) |
+| `--scaffold` | `false` | Flye scaffolding |
+| `--medaka_model` | `r1041_e82_400bps_hac_v4.3.0` | Medaka model; must match the basecaller model |
+
+### Characterisation
+
+| Parameter | Default | Description |
+|---|---|---|
 | `--phabox2_db` | *(required)* | PhaBOX2 database directory |
-| `--pharokka_db` | *(required)* | Pharokka database directory |
-| `--abi` | `true` | Porechop_ABI ab initio adapter discovery |
-| `--no_split` | `true` | Disable chimera splitting |
-| `--phabox2_skip_phamer` | `Y` | Skip PhaMer virus identification (isolates are known phages) |
-| `--threads` | `8` | CPUs per process |
-| `--max_cpus` / `--max_memory` / `--max_time` | `16` / `16.GB` / `48.h` | Upper limits for any single step; raise on larger machines |
+| `--phabox2_min_len` | `1000` | Minimum contig length for PhaBOX2 |
+| `--phabox2_skip_phamer` | `Y` | Skip PhaMer virus identification |
+| `--pharokka_db` | *(required)* | Pharokka database directory (version-matched) |
 
 ### Host branch
 
 | Parameter | Default | Description |
 |---|---|---|
-| `--assemble_host` | `false` | Assemble and type the host from reads not mapping to the phage |
-| `--pool_host` | `false` | Also assemble the pooled host reads of all samples (only when they share one host) |
+| `--assemble_host` | `false` | Enable host recovery and typing |
+| `--pool_host` | `false` | Additionally assemble pooled host reads of all samples |
 | `--host_genome_size` | `5.5m` | Expected host genome size |
-| `--host_min_reads` | `1000` | Skip host assembly for samples with fewer host reads |
-| `--host_min_depth` | `10` | Below this expected depth the host is still assembled, but flagged `LOW` in the summary (species ID possible, typing unreliable) |
-| `--kaptive_k_db` / `--kaptive_o_db` | `kpsc_k` / `kpsc_o` | Kaptive databases (`ab_k` / `ab_o` for *A. baumannii*) |
-| `--mlst_scheme` | `klebsiella` | MLST scheme; `null` for automatic detection |
+| `--host_min_reads` | `1000` | Skip host assembly below this number of host reads |
+| `--host_min_depth` | `10` | Flag samples below this expected host depth as `LOW` |
+| `--kaptive_k_db` / `--kaptive_o_db` | `kpsc_k` / `kpsc_o` | Kaptive databases |
+| `--mlst_scheme` | `klebsiella` | PubMLST scheme; `false` for automatic detection |
 
-## Output
+### Resources
+
+| Parameter | Default | Description |
+|---|---|---|
+| `--threads` | `8` | CPUs requested per multithreaded process |
+| `--max_cpus` / `--max_memory` / `--max_time` | `16` / `16.GB` / `48.h` | Upper limits applied to every process; raise on larger machines or HPC |
+
+---
+
+## 8. Output
 
 ```
 results/
-├── 01_porechop_abi/          trimmed reads + logs
-├── 02_filtlong/              filtered reads + logs
+├── 01_porechop_abi/
+│   ├── <sample>_trimmed.fastq.gz          adapter-trimmed reads
+│   └── <sample>_porechop.log
+├── 02_filtlong/
+│   ├── <sample>_filtered.fastq.gz         reads used for assembly and polishing
+│   └── <sample>_filtlong.log              read counts before/after filtering
 ├── 03_flye_assembly/<sample>/
-│   ├── assembly.fasta        draft assembly
-│   ├── assembly_graph.gfa    view in Bandage
-│   └── assembly_info.txt     per-contig stats incl. circularity (circ. = Y)
-├── 04_medaka/<sample>/       polished genome
-├── 05_dnaapler/              final reoriented genome  ← use this
-├── 06_assembly_stats/        per-sample statistics
-├── 07_phabox2/<sample>/      taxonomy, lifestyle, host prediction
-├── 08_pharokka/<sample>/     annotation (.gbk, .gff, .faa)
-├── 09_host/                  (--assemble_host)
-│   ├── <sample>/             host reads + depth, assembly, Kaptive, MLST
-│   ├── pooled/               (--pool_host)
-│   ├── host_typing_summary.tsv
-│   └── host_concordance.txt
-├── summary/assembly_summary.tsv
+│   ├── assembly.fasta                     draft assembly
+│   ├── assembly_graph.gfa                 assembly graph (inspect in Bandage)
+│   └── assembly_info.txt                  per-contig length, coverage, circularity, repeat, multiplicity
+├── 04_medaka/<sample>/
+│   └── <sample>_polished.fasta            polished assembly
+├── 05_dnaapler/
+│   └── <sample>_reoriented.fasta          FINAL PHAGE GENOME (starts at terL)
+├── 06_assembly_stats/
+│   └── <sample>_assembly_stats.tsv        contigs, length, largest contig, N50, N90, GC %
+├── 07_phabox2/<sample>/<sample>_phabox2/
+│   └── final_prediction/                  lineage, PhaGCN score, genus cluster, lifestyle, host and scores
+├── 08_pharokka/<sample>/pharokka_out/
+│   ├── <sample>.gbk                       annotated genome (GenBank)
+│   ├── <sample>.gff                       annotation (GFF3)
+│   ├── <sample>.tbl                       NCBI feature table (for submission)
+│   ├── <sample>_cds_final_merged_output.tsv   per-gene coordinates, strand, PHROG, function, VFDB/CARD hits
+│   ├── <sample>_cds_functions.tsv         gene counts per PHROG category + tRNA/CRISPR/tmRNA/VFDB/CARD
+│   ├── <sample>_length_gc_cds_density.tsv length, GC, coding density
+│   ├── <sample>_top_hits_mash_inphared.tsv    closest INPHARED genome, Mash distance, taxonomy, isolation host
+│   ├── phanotate.faa / phanotate.ffn      predicted proteins / genes
+│   └── terL.faa / terL.ffn                large terminase subunit (phylogenetic marker)
+├── 09_host/                               (--assemble_host)
+│   ├── <sample>/
+│   │   ├── <sample>_host_reads.fastq.gz   non-phage reads
+│   │   ├── <sample>_host_reads.stats.tsv  host reads, host bases, expected depth
+│   │   ├── flye/<sample>_host_assembly.fasta
+│   │   ├── <sample>_host_polished.fasta   polished host assembly
+│   │   ├── kaptive/                       K- and O-locus reports (+ locus plots)
+│   │   └── <sample>_mlst.tsv
+│   ├── pooled/                            (--pool_host)
+│   ├── host_typing_summary.tsv            per-sample assembly metrics, KL/OL locus, confidence, ST, alleles, depth, flag
+│   └── host_concordance.txt               samples grouped by host profile
+├── summary/assembly_summary.tsv           phage assembly statistics for all samples
 └── pipeline_report.html, pipeline_timeline.html, pipeline_dag.html, pipeline_trace.txt
 ```
 
-A single contig close to the expected genome size with high, even coverage indicates a complete phage genome. Do not rely on circularity alone: many phages have linear genomes with terminal repeats or cohesive ends, so check `assembly_info.txt` together with comparison to the closest reference genome.
+---
 
-### Host branch: what to expect
+## 9. Interpreting the results
 
-Host depth depends on how much host DNA remains in the lysate (DNase treatment removes most of it), so host assemblies are often fragmented. Capsule typing still works on fragmented assemblies because Kaptive only needs the ~30 kb capsule locus; MLST and gene-level conclusions need more depth. Check `expected_depth` in `09_host/<sample>/<sample>_host_reads.stats.tsv`. Uncalled values (`-`) usually reflect low depth, not a different host. When all samples share one profile, `--pool_host` combines their host reads for a more complete host genome.
+### Genome completeness
 
-## Resume a run
+A complete phage genome is typically recovered as **one contig of the expected length with high, uniform coverage** (`assembly_info.txt`). Circularity should not be used as the criterion on its own:
 
-```bash
-nextflow run main.nf --input "data/*.fastq.gz" --genome_size 50k -profile conda -resume
-```
+* Many phages have **linear** genomes with direct terminal repeats (DTRs) or cohesive ends; Flye may collapse a DTR and report the contig as circular (`circ. = Y`), or report a linear genome correctly as `N`.
+* Confirm completeness by comparison with the closest reference genome (Pharokka Mash hit) and, where relevant, by inspecting read pile-ups at the contig ends for terminal repeats.
 
-## Tested on
+### Taxonomy and novelty
 
-Nextflow 25.10.0 on macOS (Intel) <!-- TO FILL: macOS version, e.g. 14.5 -->
+* Pharokka `top_hits_mash_inphared.tsv`: a Mash distance close to 0 with ~1,000/1,000 matching hashes indicates a near-identical genome already in GenBank; larger distances (or no hit at `--mash_distance 0.2`) indicate a more divergent or novel phage.
+* PhaBOX2 `GenusCluster = known_genus` places the phage in an existing ICTV genus. Family names may differ between PhaBOX2 and INPHARED because they follow different ICTV releases.
 
-| Tool | Version | | Tool | Version |
-|---|---|---|---|---|
-| Porechop_ABI | 0.5.0 | | Pharokka | 1.10.1 |
-| Filtlong | 0.3.1 | | minimap2 | 2.28 |
-| Flye | 2.9.6 | | SAMtools | 1.20 |
-| Medaka | 2.1.1 | | Kaptive | 3.1.0 |
-| Dnaapler | 1.4.0 | | mlst | 2.33.1 |
-| PhaBOX2 | 2.1.13 | | Assembly statistics | built-in (awk) |
+### Therapeutic suitability
 
-## Citation
+PhaTYP `virulent`, absence of integrase/excisionase genes (Pharokka category *integration and excision* = 0) and absence of VFDB/CARD hits are consistent with a strictly lytic phage free of known virulence and resistance genes.
 
-If you use this pipeline, please cite it using the DOI above (see `CITATION.cff`), together with the tools it wraps: Porechop_ABI, Filtlong, Flye, Medaka, Dnaapler, PhaBOX2, Pharokka and, for the host branch, minimap2, SAMtools, Kaptive and mlst.
+### Host typing
+
+Use `depth_note` in `host_typing_summary.tsv`: `LOW` samples support species identification only; rely on K/O and ST calls from `OK` samples or from the pooled assembly.
+
+---
+
+## 10. Validation
+
+The workflow was run end to end with `-profile conda` (environments built from bioconda) on a public dataset not used during development: *Klebsiella* phage **Mera**, BioProject PRJNA914245, ONT run **SRR22972385** (MinION, R9.4.1, PCR-based library).
+
+| Metric | Published genome (OQ579025) | phage-assembly-nf |
+|---|---|---|
+| Contigs | 1 | 1 |
+| Length | 41,400 bp | 41,397 bp |
+| Coverage | — | 373× (after Filtlong) |
+| INPHARED Mash top hit | — | OQ579025, 997/1,000 hashes, distance 7.2 × 10⁻⁵ |
+| Genus (PhaGCN) | *Przondovirus* | *Przondovirus* (score 1.00) |
+| Lifestyle (PhaTYP) | — | virulent (1.0) |
+| Host genus (CHERRY) | *Klebsiella* | *Klebsiella* (0.84) |
+| CDS / coding density | 51 / 92.5 % | 58 (PHANOTATE) / 94.4 % |
+
+These data were generated on R9.4.1 and polished with the default R10.4.1 Medaka model, so the 3 bp length difference is an upper bound on the error expected with a matching model. The host branch recovered 9,587 non-phage reads (~2.5× of a 5.5 Mb genome), producing a fragmented 693 kb assembly (61 contigs, 58.4 % GC) that was flagged `LOW`; BLAST of host contigs identified *Klebsiella*.
+
+---
+
+## 11. Computational requirements
+
+* **Phage branch:** typically < 8 GB RAM and minutes to an hour per isolate on a laptop, depending on depth (use `--target_bases` for very deep samples).
+* **Host branch:** Flye on a ~5 Mb bacterial genome requests up to 16 GB RAM.
+* **First run with `-profile conda`:** environment creation can take 30–60 min; environments are cached in `work/conda/` and reused.
+* **Disk:** Pharokka database ~2 GB; PhaBOX2 database several GB.
+
+---
+
+## 12. Troubleshooting
+
+| Message | Cause | Fix |
+|---|---|---|
+| `Cannot find Java or it's a wrong version` | Java < 17 in the active environment | Use the dedicated Nextflow environment (section 4.1) |
+| `Process requirement exceeds available memory` | Machine has less memory than a step requests | `--max_memory 8.GB` (or the available amount) |
+| `PHROGs Database file VERSION_x_x_x is missing` | Pharokka database from a different release | Install the database with Pharokka 1.10.1 (section 4.4) |
+| `--phabox2_db directory not found` / `is empty` | Wrong database path | Correct the path; checked at launch |
+| `TypeError: Invalid value 'known_genus' for dtype 'int64'` | PhaBOX2 run with pandas 3 | Use the pipeline's environment (pandas 2.2 pinned) |
+| `Unable to acquire lock on session` | Another Nextflow run is active in the same directory, or a stale lock | Stop the other run, or remove the reported `LOCK` file if no process holds it |
+| Host branch flagged `LOW` | Little host DNA in the lysate (DNase-treated) | Expected; use for species ID only, or `--pool_host` if isolates share a host |
+
+---
+
+## 13. Software versions
+
+Pinned in `nextflow.config` for the `conda` and `docker` profiles.
+
+| Tool | Version | Tool | Version |
+|---|---|---|---|
+| Porechop_ABI | 0.5.0 | Pharokka | 1.10.1 |
+| Filtlong | 0.3.1 | minimap2 | 2.28 |
+| Flye | 2.9.6 | SAMtools | 1.20 |
+| Medaka | 2.1.1 | Kaptive | 3.1.0 |
+| Dnaapler | 1.4.0 | mlst | 2.33.1 |
+| PhaBOX2 | 2.1.13 (pandas 2.2) | Nextflow | ≥ 24.04 (tested 25.10.0) |
+
+Tested on macOS (Intel) with Nextflow 25.10.0 and OpenJDK 17.
+
+---
+
+## 14. Citation
+
+If you use this workflow, please cite:
+
+> Algarni, A. T. (2026). *phage-assembly-nf: Nextflow pipeline for assembly, polishing and annotation of bacteriophage genomes and typing of their propagation host from Oxford Nanopore reads*. Zenodo. https://doi.org/10.5281/zenodo.23300715
+
+and the tools it wraps: Porechop_ABI, Filtlong, Flye, Medaka, Dnaapler, PhaBOX2, Pharokka (with PHANOTATE, MMseqs2, PyHMMER, PHROGs, INPHARED, VFDB, CARD, tRNAscan-SE, Aragorn, MinCED), and for the host branch minimap2, SAMtools, Kaptive and mlst (PubMLST).
 
 ## Author
 
-Abdulmalek T. Algarni — King Abdulaziz City for Science and Technology (KACST)
+Abdulmalek T. Algarni ([ORCID 0000-0002-2872-3724](https://orcid.org/0000-0002-2872-3724)) — King Abdulaziz City for Science and Technology (KACST)
 
 ## License
 
