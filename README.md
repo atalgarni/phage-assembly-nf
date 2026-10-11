@@ -54,9 +54,9 @@ Raw ONT reads (.fastq.gz)
 - Conda/mamba (recommended), Docker (containers built via Seqera Wave), or all tools in `PATH`
 - Dnaapler can share the Pharokka environment
 - Databases (required): [PhaBOX2](https://github.com/KennthShang/PhaBOX) and [Pharokka](https://github.com/gbouras13/pharokka)
-  - The Pharokka database must match the Pharokka version (1.11.0 needs the v1.11.0 database with Rfam models):
+  - The Pharokka database must match the Pharokka version; download it with the same Pharokka release the pipeline uses:
     ```bash
-    mamba create -n pharokka -c conda-forge -c bioconda pharokka=1.11.0 -y
+    mamba create -n pharokka -c conda-forge -c bioconda pharokka=1.10.1 -y
     conda run -n pharokka install_databases.py -o pharokka_db
     ```
 
@@ -162,7 +162,7 @@ Nextflow 25.10.0 on macOS (Intel) <!-- TO FILL: macOS version, e.g. 14.5 -->
 
 | Tool | Version | | Tool | Version |
 |---|---|---|---|---|
-| Porechop_ABI | 0.5.0 | | Pharokka | 1.11.0 |
+| Porechop_ABI | 0.5.0 | | Pharokka | 1.10.1 |
 | Filtlong | 0.3.1 | | minimap2 | 2.28 |
 | Flye | 2.9.6 | | SAMtools | 1.20 |
 | Medaka | 2.1.1 | | Kaptive | 3.1.0 |

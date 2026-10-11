@@ -11,7 +11,7 @@ dependencies:
   - flye=2.9.6
   - medaka=2.1.1
   - dnaapler=1.4.0
-  - pharokka=1.11.0
+  - pharokka=1.10.1
   # Host branch
   - minimap2=2.28
   - samtools=1.20
