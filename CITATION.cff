@@ -3,12 +3,17 @@ message: "If you use this software, please cite it as below."
 type: software
 title: "phage-assembly-nf: Nextflow pipeline for assembly, polishing and annotation of bacteriophage genomes and typing of their propagation host from Oxford Nanopore reads"
 version: 1.0.0
+doi: "10.5281/zenodo.23300715"
 date-released: 2026-10-11
 authors:
   - family-names: "Algarni"
     given-names: "Abdulmalek T."
     affiliation: "King Abdulaziz City for Science and Technology (KACST)"
     orcid: "https://orcid.org/0000-0002-2872-3724"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.23300715"
+    description: "Zenodo archive of v1.0.0"
 repository-code: "https://github.com/atalgarni/phage-assembly-nf"
 license: MIT
 keywords:
