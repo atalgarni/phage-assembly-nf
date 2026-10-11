@@ -1,6 +1,6 @@
 # phage-assembly-nf
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23300715.svg)](https://doi.org/10.5281/zenodo.23300715)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23300714.svg)](https://doi.org/10.5281/zenodo.23300714)
 ![Nextflow](https://img.shields.io/badge/nextflow-%E2%89%A524.04-brightgreen)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
@@ -503,7 +503,9 @@ Tested on macOS (Intel) with Nextflow 25.10.0 and OpenJDK 17.
 
 If you use this workflow, please cite:
 
-> Algarni, A. T. (2026). *phage-assembly-nf: Nextflow pipeline for assembly, polishing and annotation of bacteriophage genomes and typing of their propagation host from Oxford Nanopore reads*. Zenodo. https://doi.org/10.5281/zenodo.23300715
+> Algarni, A. T. (2026). *phage-assembly-nf: Nextflow pipeline for assembly, polishing and annotation of bacteriophage genomes and typing of their propagation host from Oxford Nanopore reads*. Zenodo. https://doi.org/10.5281/zenodo.23300714
+
+This concept DOI always resolves to the latest version. To cite a specific release, use its version DOI: v1.0.0 — [10.5281/zenodo.23300715](https://doi.org/10.5281/zenodo.23300715); v1.0.1 — [10.5281/zenodo.23301839](https://doi.org/10.5281/zenodo.23301839).
 
 Please also cite the tools and databases the workflow depends on (section 15).
 
