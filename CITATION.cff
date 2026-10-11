@@ -1,14 +1,14 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
-title: "ONT Phage Assembly Pipeline: Nextflow DSL2 workflow for assembly, polishing and annotation of bacteriophage genomes from Oxford Nanopore reads"
+title: "phage-assembly-nf: Nextflow pipeline for assembly, polishing and annotation of bacteriophage genomes and typing of their propagation host from Oxford Nanopore reads"
 version: 1.0.0
-date-released: 2026-MM-DD   # TO FILL on release
+date-released: 2026-10-11
 authors:
   - family-names: "Algarni"
     given-names: "Abdulmalek T."
     affiliation: "King Abdulaziz City for Science and Technology (KACST)"
-    orcid: "https://orcid.org/0000-0000-0000-0000"   # TO FILL
+    orcid: "https://orcid.org/0000-0002-2872-3724"
 repository-code: "https://github.com/atalgarni/phage-assembly-nf"
 license: MIT
 keywords:
@@ -18,3 +18,5 @@ keywords:
   - "genome assembly"
   - "Klebsiella pneumoniae"
   - "phage annotation"
+  - "Kaptive"
+  - "host typing"

@@ -1,4 +1,4 @@
-# ONT Phage Assembly Pipeline
+# phage-assembly-nf
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
 ![Nextflow](https://img.shields.io/badge/nextflow-%E2%89%A524.04-brightgreen)
